@@ -1,5 +1,4 @@
-TEST_PASTE_123
-LINE2# Churn Insight RAG
+# Churn Insight RAG
 
 A production-ready **Retrieval-Augmented Generation (RAG)** system that answers natural-language questions about customer churn with **grounded, cited answers**.
 
