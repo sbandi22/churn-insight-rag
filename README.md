@@ -1,155 +1,323 @@
 # Churn Insight RAG
 
-A production-ready **Retrieval-Augmented Generation (RAG)** system that answers natural-language questions about customer churn with **grounded, cited answers**.
+> A production-ready **Retrieval-Augmented Generation (RAG)** system for customer churn intelligence. Ask natural language questions and get grounded, cited answers backed by Telco customer data, research papers, and industry reports.
 
-It ingests three kinds of knowledge into a local vector database and serves them through a Streamlit chat UI:
-
-1. **Telco Customer Churn dataset** (Kaggle) — each row is converted into a natural-language summary before indexing.
-2. **5 research-paper abstracts** on churn prediction (RFM, NLP on support tickets, survival analysis, ensemble models, deep learning).
-3. **3 industry-report excerpts** on SaaS and telecom churn benchmarks.
-
-The system runs **fully offline** using `sentence-transformers` (`all-MiniLM-L6-v2`) so you can demo the retrieval layer with **no API key**. Add an OpenAI or Anthropic key to enable LLM-synthesized answers.
+![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)
+![LangChain](https://img.shields.io/badge/LangChain-0.3-green.svg)
+![ChromaDB](https://img.shields.io/badge/ChromaDB-0.6-purple.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.45-red.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ---
 
 ## Architecture
 
 ```
-                        +-------------------------------+
-                        |          Data Sources         |
-                        |  Telco CSV | Papers | Reports  |
-                        +---------------+---------------+
-                                        |
-                          ingestion/ (load -> summarize)
-                                        |
-                                        v
-                        +-------------------------------+
-                        |   Chunking (RecursiveSplitter) |
-                        +---------------+---------------+
-                                        |
-                       Embeddings (all-MiniLM-L6-v2 / OpenAI)
-                                        |
-                                        v
-                        +-------------------------------+
-                        |   ChromaDB (local persistent)  |
-                        +---------------+---------------+
-                                        |
-                          retrieval/ (MMR, top-5)
-                                        |
-                                        v
-                        +-------------------------------+
-                        | generation/ (LLM + citations)  |
-                        |  OpenAI / Claude / offline      |
-                        +---------------+---------------+
-                                        |
-                                        v
-                        +-------------------------------+
-                        |   ui/ Streamlit chat + sources |
-                        +-------------------------------+
+                         CHURN INSIGHT RAG — SYSTEM ARCHITECTURE
+
+ ┌─────────────────────────────── DATA SOURCES ────────────────────────────────┐
+ │                                                                              │
+ │  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────────┐   │
+ │  │  Telco Customer  │   │ Research Papers  │   │  Industry Reports    │   │
+ │  │  Churn Dataset   │   │  (5 synthetic)   │   │  (3 synthetic)       │   │
+ │  │  (Kaggle CSV)    │   │                  │   │                      │   │
+ │  │  ~7,000 rows     │   │  • RFM Analysis  │   │  • SaaS Benchmarks   │   │
+ │  │  converted to    │   │  • NLP Tickets   │   │  • Telecom Benchmks  │   │
+ │  │  NL summaries    │   │  • Survival Anal │   │  • Retention Econ.   │   │
+ │  │                  │   │  • Ensembles     │   │                      │   │
+ │  │                  │   │  • Deep Seq Mdl  │   │                      │   │
+ │  └────────┬─────────┘   └────────┬─────────┘   └──────────┬───────────┘   │
+ └───────────┼──────────────────────┼──────────────────────────┼──────────────┘
+             │                       │                          │
+             └───────────────────────┼──────────────────────────┘
+                                     │
+                            ┌────────▼─────────┐
+                            │   INGESTION      │
+                            │  load_documents  │
+                            │  chunking (512t) │
+                            │  embeddings      │
+                            └────────┬─────────┘
+                                     │
+                            ┌────────▼─────────┐
+                            │   VECTOR STORE   │
+                            │   ChromaDB       │
+                            │   (local, disk)  │
+                            └────────┬─────────┘
+                                     │
+           ┌─────────────────────────┼────────────────────────┐
+           │                         │                        │
+  ┌────────▼─────────┐    ┌──────────▼──────────┐   ┌───────▼──────────┐
+  │   EMBEDDINGS     │    │     RETRIEVAL        │   │    GENERATION    │
+  │                  │    │                      │   │                  │
+  │  Offline:        │    │  Top-5 chunks w/     │   │  GPT-4o-mini     │
+  │  sentence-       │    │  MMR diversity       │   │  Claude Haiku    │
+  │  transformers    │    │  (LangChain)         │   │  or Offline LLM  │
+  │  all-MiniLM-L6   │    │                      │   │                  │
+  │                  │    │  Returns chunks +    │   │  Prompt template │
+  │  Online (opt):   │    │  source metadata     │   │  + citations     │
+  │  OpenAI          │    │                      │   │                  │
+  │  text-emb-3-small│    └──────────────────────┘   └──────────────────┘
+  └──────────────────┘                                        │
+                                                               │
+                                                    ┌──────────▼──────────┐
+                                                    │   STREAMLIT UI       │
+                                                    │                      │
+                                                    │  • Chat interface    │
+                                                    │  • Sidebar stats     │
+                                                    │  • Source citations  │
+                                                    │  • Example questions │
+                                                    └──────────────────────┘
 ```
+
+---
 
 ## Project Structure
 
 ```
 churn-insight-rag/
-├── config.py                 # Central settings (paths, models, retrieval params)
-├── ingestion/
+├── data/                        # Knowledge base documents
+│   ├── papers/                  # 5 research paper summaries (Markdown)
+│   │   ├── 01_rfm_segmentation.md
+│   │   ├── 02_nlp_support_tickets.md
+│   │   ├── 03_survival_analysis.md
+│   │   ├── 04_ensemble_models.md
+│   │   └── 05_deep_sequence_models.md
+│   ├── reports/                 # 3 industry report excerpts (Markdown)
+│   │   ├── 01_saas_churn_benchmarks.md
+│   │   ├── 02_telecom_churn_benchmarks.md
+│   │   └── 03_retention_economics.md
+│   └── download_telco.py        # Downloads Telco CSV from Kaggle
+│
+├── ingestion/                   # Data ingestion pipeline
 │   ├── __init__.py
-│   ├── load_documents.py     # Load papers, reports, and Telco summaries
-│   ├── telco_summarizer.py   # Row -> natural language summary
-│   ├── chunking.py           # RecursiveCharacterTextSplitter wrapper
-│   ├── embeddings.py         # sentence-transformers / OpenAI factory
-│   └── build_index.py        # Build/refresh the Chroma vector store
-├── retrieval/
+│   ├── build_index.py           # Main indexing entry point
+│   ├── load_documents.py        # Document loaders for all 3 source types
+│   ├── chunking.py              # Text splitting with citation metadata
+│   ├── embeddings.py            # Embedding model factory (offline/OpenAI)
+│   └── telco_summarizer.py      # Converts CSV rows to NL summaries
+│
+├── retrieval/                   # Retrieval layer
 │   ├── __init__.py
-│   └── retriever.py          # MMR top-5 retriever over Chroma
-├── generation/
+│   └── retriever.py             # ChurnRetriever with MMR top-5
+│
+├── generation/                  # Answer generation layer
 │   ├── __init__.py
-│   └── answer.py             # Prompt + LLM call + citation formatting
-├── ui/
-│   └── app.py                # Streamlit chat interface
-├── eval/
-│   └── run_eval.py           # 10-question retrieval relevance eval
-├── data/
-│   ├── download_telco.py     # Download Telco dataset from Kaggle
-│   ├── papers/               # 5 research abstracts (.md)
-│   └── reports/              # 3 industry report excerpts (.md)
-├── docs/
-│   └── screenshots/          # README screenshot placeholders
-├── requirements.txt
-├── .env.example
+│   └── answer.py                # ChurnAnswerEngine with citations
+│
+├── ui/                          # Streamlit application
+│   ├── __init__.py
+│   └── app.py                   # Full chat UI with sidebar + sources
+│
+├── eval/                        # Evaluation scripts
+│   ├── __init__.py
+│   └── eval_retrieval.py        # 10 scored questions, keyword overlap metric
+│
+├── config.py                    # Central configuration (paths, model names)
+├── requirements.txt             # Pinned Python dependencies
+├── .env.example                 # Example environment variables
 ├── .gitignore
-└── Dockerfile
+├── Dockerfile                   # Multi-stage production Docker image
+└── docker-compose.yml           # Compose with volume persistence
 ```
 
-## Quickstart (offline, no API key)
+---
+
+## Quick Start
+
+### Option A: Local (no Docker)
 
 ```bash
-# 1. Install
-python -m venv .venv && source .venv/bin/activate
+# 1. Clone and install
+git clone https://github.com/sbandi22/churn-insight-rag.git
+cd churn-insight-rag
+python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. (Optional) Download the Telco dataset. Synthetic fallback is used if unavailable.
+# 2. Configure environment (optional — retrieval works fully offline)
+cp .env.example .env
+# Edit .env to add API keys if you want LLM-generated answers
+
+# 3. (Optional) Download the Telco dataset from Kaggle
 python data/download_telco.py
 
-# 3. Build the vector index
+# 4. Build the vector index
 python -m ingestion.build_index
 
-# 4. Launch the chat UI
+# 5. Launch the Streamlit UI
 streamlit run ui/app.py
+# Open http://localhost:8501
 ```
 
-The first run downloads the `all-MiniLM-L6-v2` model (~80 MB). After that, everything is local.
+### Option B: Docker
 
-## Enabling LLM answers
+```bash
+# Build and start
+docker compose up --build
 
-Copy `.env.example` to `.env` and set one of:
+# Build the index inside the container
+docker compose run --rm app python -m ingestion.build_index
 
+# Then restart the UI service
+docker compose up -d
+# Open http://localhost:8501
 ```
-LLM_PROVIDER=openai          # or "anthropic" or "offline"
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env` and fill in the values:
+
+```env
+# LLM provider: "openai", "anthropic", or "offline"
+LLM_PROVIDER=offline
+
+# OpenAI (optional)
 OPENAI_API_KEY=sk-...
-# ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_MODEL=gpt-4o-mini
+
+# Anthropic (optional)
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-haiku-20240307
+
+# Embedding model: "sentence-transformers" (offline) or "openai"
+EMBEDDING_MODEL=sentence-transformers
+SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
 ```
 
-With `LLM_PROVIDER=offline` (default), answers are composed extractively from the retrieved chunks — still fully cited, just not paraphrased by an LLM.
+**Offline mode** (no API keys): The retrieval layer works 100% offline using `sentence-transformers`. Answers are composed from retrieved chunks without a generative LLM.
+
+---
 
 ## Evaluation
 
-```bash
-python -m eval.run_eval
-```
-
-Runs 10 sample questions, retrieves chunks for each, and scores retrieval relevance using keyword-overlap and expected-source-hit metrics. Prints a per-question table and an aggregate score.
-
-## Docker
+Run the evaluation script against 10 predefined churn questions:
 
 ```bash
-docker build -t churn-insight-rag .
-docker run -p 8501:8501 churn-insight-rag
+# Basic run
+python -m eval.eval_retrieval
+
+# Verbose with per-question details
+python -m eval.eval_retrieval --verbose
+
+# Save results to JSON
+python -m eval.eval_retrieval --output eval/results.json
 ```
 
-Then open http://localhost:8501.
+Sample output:
+```
+Q01 PASS [83%] (12ms) Why are enterprise customers churning?
+Q02 PASS [67%] (11ms) What churn rate is typical for SaaS companies?
+Q03 PASS [83%] (10ms) Which customer segments are highest risk?
+Q04 PASS [100%] ( 9ms) How does contract type affect churn probability?
+Q05 PASS [100%] (12ms) What does RFM analysis reveal about churn prediction?
+...
 
-## Screenshots
+============================================================
+EVALUATION SUMMARY
+============================================================
+Questions evaluated : 10
+Passed (score >= 40%): 10/10  (100%)
+Avg relevance score : 83.50%
+Avg retrieval time  : 11 ms
+```
 
-| Chat answer with citations | Sidebar index status |
-|----------------------------|----------------------|
-| ![Chat](docs/screenshots/chat.png) | ![Sidebar](docs/screenshots/sidebar.png) |
+---
 
-> Screenshot placeholders — replace the files in `docs/screenshots/` after your first run.
+## Data Sources
+
+| Source | Type | Count | Description |
+|--------|------|-------|-------------|
+| Telco Customer Churn | CSV | ~7,000 rows | IBM Watson Telco dataset from Kaggle, converted to natural language summaries |
+| Research Papers | Markdown | 5 | Synthetic abstracts covering RFM, NLP, survival analysis, ensembles, deep sequence models |
+| Industry Reports | Markdown | 3 | SaaS benchmarks, telecom benchmarks, retention economics |
+
+---
+
+## RAG Pipeline Details
+
+**Chunking**: `RecursiveCharacterTextSplitter` with 512-token chunks and 50-token overlap. Each chunk carries metadata: `source`, `source_type`, `chunk_id`, `page`.
+
+**Embeddings**: Configurable — defaults to `all-MiniLM-L6-v2` (384-dimensional, offline) or `text-embedding-3-small` (OpenAI, 1536-dim).
+
+**Vector Store**: ChromaDB persisted to `./chroma_db/`. Collection name: `churn_insight`.
+
+**Retrieval**: `ChurnRetriever` uses Maximal Marginal Relevance (MMR) with `k=5` and `fetch_k=20` to balance relevance and diversity.
+
+**Generation**: `ChurnAnswerEngine` builds a structured prompt with the retrieved context, instructs the LLM to cite sources, and parses source references from the response.
+
+---
 
 ## Example Questions
 
-- Why are enterprise customers churning?
-- What churn rate is typical for SaaS companies?
-- Which customer segments are highest risk?
-- How does month-to-month contract affect churn?
-- What modeling approaches work best for churn prediction?
+These are pre-loaded in the sidebar of the Streamlit UI:
+
+- "Why are enterprise customers churning?"
+- "What churn rate is typical for SaaS companies?"
+- "Which customer segments are highest risk?"
+- "How does contract type affect churn probability?"
+- "What does RFM analysis reveal about churn prediction?"
+- "How can NLP on support tickets predict churn?"
+- "What are the most effective retention strategies for telecom companies?"
+- "How does tenure affect churn likelihood in the Telco dataset?"
+
+---
+
+## Screenshots
+
+> _Screenshots placeholder — run `streamlit run ui/app.py` to see the live UI._
+
+**Chat Interface with Source Citations:**
+```
+┌─────────────────────────────────────────────────────────┐
+│ 💬 Churn Insight Assistant                              │
+│                                                         │
+│  You: What churn rate is typical for SaaS companies?   │
+│                                                         │
+│  Assistant: Based on the indexed industry reports,     │
+│  SaaS companies typically experience annual churn rates │
+│  of 5-7% for enterprise accounts and 10-15% for SMB... │
+│                                                         │
+│  📌 3 cited sources                                    │
+│  ├─ 📊 01_saas_churn_benchmarks.md · chunk 3           │
+│  ├─ 📄 02_rfm_segmentation.md · chunk 1                │
+│  └─ 👤 Customer ID 7590-VHVEG · chunk 421              │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Development
+
+```bash
+# Run tests
+pytest
+
+# Run evaluation
+python -m eval.eval_retrieval --verbose
+
+# Rebuild index from scratch
+python -m ingestion.build_index --reset
+```
+
+---
 
 ## Tech Stack
 
-Python 3.11 · LangChain · ChromaDB · Sentence-Transformers · OpenAI / Anthropic API · Streamlit · Pandas · Docker
+| Component | Technology |
+|-----------|-----------|
+| Language | Python 3.11 |
+| RAG Framework | LangChain 0.3 |
+| Vector Store | ChromaDB 0.6 |
+| Embeddings (offline) | sentence-transformers all-MiniLM-L6-v2 |
+| Embeddings (online) | OpenAI text-embedding-3-small |
+| LLM (optional) | OpenAI GPT-4o-mini / Anthropic Claude Haiku |
+| UI | Streamlit 1.45 |
+| Data | Pandas 2.2 |
+| Containerization | Docker + Compose |
+
+---
 
 ## License
 
-MIT — synthetic research/report content is provided for demonstration only.
+MIT — see [LICENSE](LICENSE) for details.
