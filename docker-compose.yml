@@ -1,0 +1,38 @@
+# Churn Insight RAG - Docker Compose
+# Usage:
+#   docker compose up --build        # Start the Streamlit UI
+#   docker compose run --rm app python -m ingestion.build_index  # Build index
+#   docker compose run --rm app python -m eval.eval_retrieval -v  # Run eval
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: churn-insight-rag:latest
+    container_name: churn-insight-rag
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers}
+      - SENTENCE_TRANSFORMER_MODEL=${SENTENCE_TRANSFORMER_MODEL:-all-MiniLM-L6-v2}
+      - LLM_PROVIDER=${LLM_PROVIDER:-offline}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-20240307}
+    volumes:
+      - chroma_data:/app/chroma_db
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  chroma_data:
+    driver: local
